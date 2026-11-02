@@ -1,0 +1,20 @@
+[Unit]
+Description=Linux Web Infrastructure API
+After=network.target
+
+[Service]
+Type=simple
+User=linux-web
+Group=linux-web
+WorkingDirectory=/opt/linux-web-infrastructure/app
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/opt/linux-web-infrastructure/.venv/bin/uvicorn main:app --host 127.0.0.1 --port 8000
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+
+[Install]
+WantedBy=multi-user.target

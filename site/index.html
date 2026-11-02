@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+    <title>Linux Web Infrastructure Lab</title>
+    <style>
+        body {
+            max-width: 760px;
+            margin: 60px auto;
+            padding: 0 24px;
+            font-family: Arial, sans-serif;
+            line-height: 1.7;
+            color: #202938;
+            background: #f5f7fa;
+        }
+        main {
+            background: white;
+            padding: 32px;
+            border-radius: 12px;
+        }
+        h1 { color: #174ea6; }
+        code {
+            background: #eef2f7;
+            padding: 3px 6px;
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body>
+    <main>
+        <h1>Linux Web Infrastructure Lab</h1>
+        <p>This website is served by Nginx on a local Linux environment.</p>
+        <h2>Current milestone</h2>
+        <p>Static web hosting and Nginx configuration.</p>
+        <h2>Infrastructure roadmap</h2>
+        <ul>
+            <li>Linux administration and troubleshooting</li>
+            <li>Nginx reverse proxy and application services</li>
+            <li>HTTPS/TLS and secure configuration</li>
+            <li>Ansible automation and Terraform</li>
+            <li>Monitoring, backups, and recovery</li>
+        </ul>
+        <h2>Backend API</h2>
+        <p id="api-status">Checking backend health...</p>
+        <script>
+          fetch("/api/health")
+            .then(response => {
+              if (!response.ok) throw new Error("HTTP " + response.status);
+              return response.json();
+            })
+            .then(data => {
+              document.getElementById("api-status").textContent =
+                "API status: " + data.status;
+            })
+            .catch(() => {
+              document.getElementById("api-status").textContent =
+                "API unavailable. Check the backend service.";
+            });
+        </script>
+        <p>Environment: Ubuntu on WSL2</p>
+    </main>
+</body>
+</html>
