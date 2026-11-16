@@ -5,6 +5,8 @@ set -Eeuo pipefail
 # ==================================================
 # Linux Web Infrastructure
 # Ubuntu Deployment Script
+# Rollback is best-effort, not an atomic filesystem transaction.
+# Test on isolated Ubuntu before using beyond this local lab.
 # ==================================================
 
 # --------------------------------------------------
@@ -79,6 +81,7 @@ for command in \
     cp \
     rm \
     mktemp \
+    mv \
     date \
     find \
     runuser \
@@ -211,156 +214,192 @@ USER_CREATED=0
 NGINX_CHANGE_ATTEMPTED=0
 SERVICE_CHANGE_ATTEMPTED=0
 
+# Restore a complete directory tree without deleting the current directory first.
+# Staging is created beside the target to keep directory renames on one filesystem.
+# Staging paths are recorded and removed only after recovery has been verified.
+ROLLBACK_STAGING_DIRS=()
+
+restore_tree() {
+    local target="$1" backup="$2" label="$3"
+    local stage
+
+    if [[ ! -d "$backup" || -L "$backup" ]]; then
+        error "Missing or unsafe $label backup: $backup"
+        return 1
+    fi
+
+    if [[ ! -d "$target" || -L "$target" ]]; then
+        error "Expected existing $label deployment directory: $target"
+        return 1
+    fi
+
+    if ! stage="$(mktemp -d "${target}.restore.XXXXXX")"; then
+        error "Could not create $label staging directory"
+        return 1
+    fi
+    ROLLBACK_STAGING_DIRS+=("$stage")
+
+    if ! cp -a -- "$backup" "$stage/restored"; then
+        error "Could not stage $label backup; current installation remains in place"
+        return 1
+    fi
+
+    if [[ "$label" == "application" ]]; then
+        if [[ ! -f "$stage/restored/app/main.py" ||
+              ! -f "$stage/restored/app/requirements.txt" ||
+              ! -x "$stage/restored/.venv/bin/python" ]]; then
+            error "Staged application is missing essential files"
+            return 1
+        fi
+    else
+        if [[ ! -f "$stage/restored/index.html" ]]; then
+            error "Staged website is missing index.html"
+            return 1
+        fi
+    fi
+
+    if ! mv -T -- "$target" "$stage/previous"; then
+        error "Could not move existing $label aside; refusing to activate backup"
+        return 1
+    fi
+
+    if ! mv -T -- "$stage/restored" "$target"; then
+        error "Could not activate restored $label; attempting to recover original directory"
+        if ! mv -T -- "$stage/previous" "$target"; then
+            error "CRITICAL: Original $label is retained at $stage/previous; manual recovery required"
+        fi
+        return 1
+    fi
+
+    log "Restored $label from backup (previous copy held at $stage/previous until verification)"
+}
+
 rollback() {
     local failure_code="$1"
     local rollback_failed=0
+    local stage
 
-    # Disable traps so an error during recovery cannot recurse.
+    # Errors in rollback must not recursively invoke the rollback traps.
     trap - ERR INT TERM HUP
     set +e
-
     error "Deployment failed. Attempting rollback."
 
-    # Restore the complete deployment root, including app and virtualenv.
     if [[ "$APP_ROOT_EXISTED" -eq 1 ]]; then
-        rm -rf "$APP_ROOT"
-        if ! cp -a "$BACKUP_DIR/app-root" "$APP_ROOT"; then
-            error "Could not restore deployment root."
-            rollback_failed=1
-        fi
+        restore_tree "$APP_ROOT" "$BACKUP_DIR/app-root" application || rollback_failed=1
     else
-        if ! rm -rf "$APP_ROOT"; then
-            error "Could not remove newly-created deployment root."
-            rollback_failed=1
-        fi
+        rm -rf -- "$APP_ROOT" || { error "Could not remove newly created application root"; rollback_failed=1; }
     fi
 
-    # Restore static website.
     if [[ "$WEB_ROOT_EXISTED" -eq 1 ]]; then
-        rm -rf "$WEB_ROOT"
-        if ! cp -a "$BACKUP_DIR/website" "$WEB_ROOT"; then
-            error "Could not restore static website."
-            rollback_failed=1
-        fi
+        restore_tree "$WEB_ROOT" "$BACKUP_DIR/website" website || rollback_failed=1
     else
-        if ! rm -rf "$WEB_ROOT"; then
-            error "Could not remove newly-created website directory."
-            rollback_failed=1
-        fi
+        rm -rf -- "$WEB_ROOT" || { error "Could not remove newly created website"; rollback_failed=1; }
     fi
 
-    # Restore Nginx site configuration.
+    # Restore Nginx configuration and its enabled-site link.
     if [[ "$NGINX_CONFIG_EXISTED" -eq 1 ]]; then
-        if ! cp -a "$BACKUP_DIR/nginx.conf" "$NGINX_AVAILABLE"; then
-            error "Could not restore Nginx configuration."
-            rollback_failed=1
-        fi
+        cp -a -- "$BACKUP_DIR/nginx.conf" "$NGINX_AVAILABLE" || { error "Could not restore Nginx config"; rollback_failed=1; }
     else
-        if ! rm -f "$NGINX_AVAILABLE"; then
-            error "Could not remove newly-created Nginx configuration."
-            rollback_failed=1
-        fi
+        rm -f -- "$NGINX_AVAILABLE" || { error "Could not remove newly created Nginx config"; rollback_failed=1; }
     fi
 
-    # Restore the Nginx enabled-site entry.
-    if ! rm -f "$NGINX_ENABLED"; then
-        error "Could not remove current Nginx enabled-site entry."
-        rollback_failed=1
-    fi
-
+    rm -f -- "$NGINX_ENABLED" || { error "Could not remove enabled-site entry"; rollback_failed=1; }
     if [[ "$NGINX_LINK_EXISTED" -eq 1 ]]; then
-        if ! cp -a "$BACKUP_DIR/nginx-enabled" "$NGINX_ENABLED"; then
-            error "Could not restore previous Nginx enabled-site entry."
-            rollback_failed=1
+        cp -a -- "$BACKUP_DIR/nginx-enabled" "$NGINX_ENABLED" || { error "Could not restore enabled-site entry"; rollback_failed=1; }
+    fi
+
+    # Stop a newly created API service before removing its unit definition.
+    if [[ "$SERVICE_FILE_EXISTED" -eq 0 ]]; then
+        if [[ "$SERVICE_CHANGE_ATTEMPTED" -eq 1 ]]; then
+            systemctl stop linux-web-api || { error "Could not stop newly created API service"; rollback_failed=1; }
+        fi
+        if [[ -f "$SERVICE_DEST" ]]; then
+            systemctl disable linux-web-api || { error "Could not disable newly created API service"; rollback_failed=1; }
         fi
     fi
 
-    # If this deployment created and attempted to start the API unit,
-    # stop it while systemd can still resolve the unit definition.
-    if [[ "$SERVICE_FILE_EXISTED" -eq 0 && "$SERVICE_CHANGE_ATTEMPTED" -eq 1 ]]; then
-        systemctl stop linux-web-api || { error "Could not stop deployment-created API unit."; rollback_failed=1; }
-    fi
-
-    # If this deployment created the API unit, remove any enablement link
-    # before deleting the unit file. This avoids leaving a dangling wants link.
-    if [[ "$SERVICE_FILE_EXISTED" -eq 0 && -f "$SERVICE_DEST" ]]; then
-        systemctl disable linux-web-api || { error "Could not disable deployment-created API unit."; rollback_failed=1; }
-    fi
-
-    # Restore systemd unit file and reload systemd's unit cache.
     if [[ "$SERVICE_FILE_EXISTED" -eq 1 ]]; then
-        if ! cp -a "$BACKUP_DIR/linux-web-api.service" "$SERVICE_DEST"; then
-            error "Could not restore systemd service file."
-            rollback_failed=1
-        fi
+        cp -a -- "$BACKUP_DIR/linux-web-api.service" "$SERVICE_DEST" || { error "Could not restore systemd unit"; rollback_failed=1; }
     else
-        if ! rm -f "$SERVICE_DEST"; then
-            error "Could not remove newly-created systemd service file."
-            rollback_failed=1
-        fi
+        rm -f -- "$SERVICE_DEST" || { error "Could not remove newly created systemd unit"; rollback_failed=1; }
     fi
+    systemctl daemon-reload || { error "systemd daemon-reload failed during rollback"; rollback_failed=1; }
 
-    if ! systemctl daemon-reload; then
-        error "systemctl daemon-reload failed during rollback."
-        rollback_failed=1
-    fi
-
-    # Restore enablement state. Nginx's unit is provided by the OS.
     if [[ "$NGINX_WAS_ENABLED" -eq 1 ]]; then
-        systemctl enable nginx || { error "Could not restore Nginx enablement."; rollback_failed=1; }
+        systemctl enable nginx || { error "Could not restore Nginx enablement"; rollback_failed=1; }
     else
-        systemctl disable nginx || { error "Could not restore Nginx disabled state."; rollback_failed=1; }
+        systemctl disable nginx || { error "Could not restore Nginx disabled state"; rollback_failed=1; }
     fi
 
-    # Only change the API enablement state if its unit existed before
-    # deployment or the deployment-created unit is still present.
     if [[ "$SERVICE_FILE_EXISTED" -eq 1 ]]; then
         if [[ "$SERVICE_WAS_ENABLED" -eq 1 ]]; then
-            systemctl enable linux-web-api || { error "Could not restore API enablement."; rollback_failed=1; }
+            systemctl enable linux-web-api || { error "Could not restore API enablement"; rollback_failed=1; }
         else
-            systemctl disable linux-web-api || { error "Could not restore API disabled state."; rollback_failed=1; }
+            systemctl disable linux-web-api || { error "Could not restore API disabled state"; rollback_failed=1; }
         fi
     fi
 
-    # Restore runtime state only if a start/reload/restart was attempted.
+    # Restore runtime state only when this deployment attempted a service change.
     if [[ "$NGINX_CHANGE_ATTEMPTED" -eq 1 ]]; then
         if [[ "$NGINX_WAS_ACTIVE" -eq 1 ]]; then
             if nginx -t; then
-                systemctl restart nginx || { error "Could not restart Nginx after rollback."; rollback_failed=1; }
+                systemctl restart nginx || { error "Could not restart Nginx after rollback"; rollback_failed=1; }
             else
-                error "Restored Nginx configuration failed validation; Nginx was not restarted."
+                error "Restored Nginx configuration failed validation"
                 rollback_failed=1
             fi
         else
-            systemctl stop nginx || { error "Could not restore Nginx inactive state."; rollback_failed=1; }
+            systemctl stop nginx || { error "Could not restore Nginx inactive state"; rollback_failed=1; }
         fi
     fi
 
     if [[ "$SERVICE_CHANGE_ATTEMPTED" -eq 1 && "$SERVICE_FILE_EXISTED" -eq 1 ]]; then
         if [[ "$SERVICE_WAS_ACTIVE" -eq 1 ]]; then
-            systemctl restart linux-web-api || { error "Could not restart API after rollback."; rollback_failed=1; }
+            systemctl restart linux-web-api || { error "Could not restart API after rollback"; rollback_failed=1; }
         else
-            systemctl stop linux-web-api || { error "Could not restore API inactive state."; rollback_failed=1; }
+            systemctl stop linux-web-api || { error "Could not restore API inactive state"; rollback_failed=1; }
         fi
     fi
 
-    # Remove only identities created by this deployment. Do this after
-    # attempting to stop services and restore their previous state.
-    if [[ "$USER_CREATED" -eq 1 ]]; then
-        userdel "$SERVICE_USER" || { error "Could not remove newly-created service user."; rollback_failed=1; }
+    # Check expected active services, and endpoints when both were previously active.
+    if [[ "$NGINX_WAS_ACTIVE" -eq 1 ]]; then
+        systemctl is-active --quiet nginx || { error "Nginx not active after rollback"; rollback_failed=1; }
+    fi
+    if [[ "$SERVICE_WAS_ACTIVE" -eq 1 ]]; then
+        systemctl is-active --quiet linux-web-api || { error "API not active after rollback"; rollback_failed=1; }
+        curl --fail --silent --show-error --max-time 5 --retry 2 --retry-delay 1 --retry-connrefused -o /dev/null "$HEALTH_URL" || { error "Direct API health failed after rollback"; rollback_failed=1; }
+    fi
+    if [[ "$NGINX_WAS_ACTIVE" -eq 1 && "$SERVICE_WAS_ACTIVE" -eq 1 ]]; then
+        curl --fail --silent --show-error --max-time 5 --retry 2 --retry-delay 1 --retry-connrefused -o /dev/null "$PROXY_HEALTH_URL" || { error "Proxy health failed after rollback"; rollback_failed=1; }
     fi
 
+    # Remove only identities created by this deployment.
+    if [[ "$USER_CREATED" -eq 1 ]]; then
+        userdel "$SERVICE_USER" || { error "Could not remove newly created service user"; rollback_failed=1; }
+    fi
     if [[ "$GROUP_CREATED" -eq 1 ]]; then
-        groupdel "$SERVICE_GROUP" || { error "Could not remove newly-created service group."; rollback_failed=1; }
+        groupdel "$SERVICE_GROUP" || { error "Could not remove newly created service group"; rollback_failed=1; }
     fi
 
     if [[ "$rollback_failed" -eq 0 ]]; then
-        log "Rollback operations completed. Verify service health manually."
-    else
-        error "Rollback was incomplete. Manual recovery is required."
+        log "Rollback operations and applicable health checks completed."
+        # Retain the independent /var/backups copy, but clean up temporary staging.
+        for stage in "${ROLLBACK_STAGING_DIRS[@]}"; do
+            if ! rm -rf -- "$stage"; then
+                error "Could not clean staging directory: $stage"
+                rollback_failed=1
+            fi
+        done
     fi
 
-    echo "Backup retained at: $BACKUP_DIR"
+    if [[ "$rollback_failed" -ne 0 ]]; then
+        error "Rollback incomplete: inspect retained staging directories before manual recovery."
+        for stage in "${ROLLBACK_STAGING_DIRS[@]}"; do
+            error "Retained staging path: $stage"
+        done
+    fi
+
+    printf 'Backup retained at: %s\n' "$BACKUP_DIR"
     exit "$failure_code"
 }
 
@@ -631,6 +670,7 @@ curl \
     --retry 5 \
     --retry-delay 2 \
     --retry-connrefused \
+    --max-time 10 \
     "$HEALTH_URL"
 printf '\n'
 
@@ -646,6 +686,7 @@ curl \
     --retry 5 \
     --retry-delay 2 \
     --retry-connrefused \
+    --max-time 10 \
     "$PROXY_HEALTH_URL"
 printf '\n'
 
