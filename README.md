@@ -1,240 +1,201 @@
+# Cloud Deployment Platform
 
-# Linux Web Infrastructure
+A reusable Ubuntu application-hosting and deployment platform built around
+FastAPI, Nginx, Docker Compose, Ansible, and AWS. It retains the original
+Linux Web Infrastructure systemd/Bash deployment as a separate supported
+option. The AWS design targets Mumbai (`ap-south-1`) and deliberately starts
+with one EC2 instance instead of incurring the cost and complexity of a NAT
+Gateway, load balancer, bastion, or managed Kubernetes cluster.
 
-A hands-on Linux infrastructure project built on Ubuntu using WSL2.
-
-The project demonstrates Linux administration, web server configuration,
-application deployment, systemd service management, deployment validation,
-and recovery from application deployment failures.
-
-## Project Status
-
-**Completed:** Local Linux web server, FastAPI application, systemd service,
-and repeatable Ubuntu deployment script.
-
-**In progress:** HTTPS/TLS, configuration management, infrastructure
-automation, monitoring, and operational reliability.
+> **Scope and verification:** This repository contains local implementations
+> and validation results, not a claim that AWS resources have been deployed.
+> The existing systemd rollback test and the new container deployment tests
+> use mocked system/service boundaries. Docker Engine integration is not
+> available in the current WSL workspace, so image builds, Compose runtime,
+> monitoring services, and load balancing still require validation on a
+> Docker-enabled host. See [implementation status](#implementation-and-test-status).
 
 ## Architecture
 
-```text
-                 Browser / curl
-                       |
-                       v
-                Nginx (port 8080)
-                       |
-             +---------+---------+
-             |                   |
-             v                   v
-        Static website       /api/ reverse proxy
-                                  |
-                                  v
-                        FastAPI (127.0.0.1:8000)
-                                  |
-                                  v
-                              Uvicorn
-                                  |
-                                  v
-                          systemd service
-                           linux-web user
+```mermaid
+flowchart LR
+    Browser[Browser] -->|HTTPS :443 / ACME HTTP :80| Nginx[Nginx container]
+    Nginx -->|private Compose network| API[FastAPI container]
+    API -->|/metrics, private network| Prometheus[Prometheus]
+    Prometheus --> Alertmanager[Alertmanager]
+    Grafana[Grafana, localhost only] --> Prometheus
+    EC2[Ubuntu EC2 + SSM] --- Nginx
+    EC2 --- API
+    GitHub[GitHub Actions OIDC] -->|publish immutable digest| ECR[ECR]
+    GitHub -->|manual, gated SSM deployment| EC2
+    ECR -->|pull| API
+    EC2 --> CloudWatch[CloudWatch Logs and alarms]
 ```
 
-## Implemented Components
+For the detailed request, deployment, trust and recovery paths, see
+[architecture](docs/architecture.md).
 
-### Nginx
+## Technology stack
 
-- Static website served on port 8080.
-- Dedicated Nginx server configuration.
-- HTTP security headers.
-- Custom 404 page.
-- Favicon handling.
-- Separate access and error logs.
-- Reverse proxy for backend API requests.
+- **Application:** Python 3.12, FastAPI, Uvicorn, Prometheus client
+- **Web and containers:** Nginx, Docker, Docker Compose
+- **Host configuration:** Ubuntu LTS, Ansible, systemd (legacy deployment)
+- **Cloud infrastructure:** AWS Mumbai, Terraform, EC2, VPC, ECR, SSM, CloudWatch
+- **Delivery:** GitHub Actions with OIDC; optional Jenkins pipeline
+- **Observability:** Prometheus, Grafana, Alertmanager, Node Exporter
+- **Optional platform:** Kubernetes manifests and local Nginx load-balancing example
 
-### FastAPI
+## Deployment options
 
-- FastAPI backend with health and information endpoints.
-- Uvicorn application server.
-- Backend bound to `127.0.0.1:8000`.
-- Nginx reverse proxy maps `/api/` requests to the backend.
+### Existing systemd deployment
 
-### Linux Service Management
-
-- systemd-managed FastAPI service.
-- Dedicated non-login service account: `linux-web`.
-- Application deployed under `/opt/linux-web-infrastructure`.
-- Production Python virtual environment.
-- Application files owned by root and readable by the service group.
-- Automatic service restart on failure.
-
-### Deployment Automation
-
-The Ubuntu deployment script is located at:
-
-` scripts/deploy-ubuntu.sh `
-
-It performs the following operations:
-
-- Checks deployment prerequisites and source files.
-- Validates the service account.
-- Prepares application and website directories.
-- Deploys application files.
-- Prepares the production Python virtual environment.
-- Installs Python dependencies when required.
-- Validates application imports using the service account.
-- Deploys static website files.
-- Installs systemd and Nginx configuration.
-- Validates Nginx configuration.
-- Starts or reloads services as needed.
-- Checks service status and API health endpoints.
-- Retains deployment backups for recovery.
-
-The deployment was tested for repeatability and for an application import
-failure. The tested rollback restored the previous application files.
-
-Rollback is best-effort; this implementation does not use atomic
-versioned releases.
-
-## API Endpoints
-
-| Endpoint | Description |
-|---|---|
-| `GET /api/health` | Checks backend health through Nginx |
-| `GET /api/info` | Returns service information and a UTC timestamp |
-
-The backend also exposes the corresponding direct endpoints on port 8000.
-
-## Repository Structure
-
-```text
-linux-web-infrastructure/
-├── app/
-│   ├── main.py
-│   └── requirements.txt
-├── deploy/
-│   ├── nginx/
-│   │   └── linux-web-infrastructure.conf
-│   └── systemd/
-│       └── linux-web-api.service
-├── docs/
-│   └── challenges/
-│       └── 01-deployment-validation-and-rollback.md
-├── scripts/
-│   └── deploy-ubuntu.sh
-├── site/
-│   ├── index.html
-│   ├── 404.html
-│   └── favicon.svg
-├── .gitignore
-└── README.md
-```
-
-## Deployment
-
-Run the deployment script from the repository root:
+The original [Ubuntu deployment script](scripts/deploy-ubuntu.sh) installs the
+FastAPI service under systemd and configures host Nginx. It is intentionally
+separate from the container platform:
 
 ```bash
 sudo bash scripts/deploy-ubuntu.sh
 ```
 
-The script creates a backup under:
+The script retains its original best-effort filesystem/service rollback
+behavior; it does not use atomic, versioned releases. Its rollback integration
+test remains in
+[scripts/test-full-rollback-isolated.sh](scripts/test-full-rollback-isolated.sh).
 
-`/var/backups/linux-web-deploy.*`
+### Local Docker Compose
 
-Review the deployment output and verify both services after deployment.
-
-## Validation
-
-Check service status:
-
-```bash
-sudo systemctl is-active nginx linux-web-api
-```
-
-Check the application service identity:
+Requires Docker Engine with the Compose plugin:
 
 ```bash
-sudo systemctl show linux-web-api -p User -p Group -p MainPID
+cp .env.example .env
+# Set GRAFANA_ADMIN_PASSWORD to a unique random value before enabling monitoring.
+docker compose -f compose.yaml -f compose.override.yaml up --build -d
+curl -fsS http://127.0.0.1:8080/api/health
 ```
 
-Validate Nginx:
+Optional monitoring starts Prometheus, Alertmanager, Grafana and Node Exporter.
+Grafana is bound to loopback only:
 
 ```bash
-sudo nginx -t
+docker compose \
+  -f compose.yaml \
+  -f compose.override.yaml \
+  -f compose.monitoring.yaml \
+  --profile monitoring up --build -d
 ```
 
-Test the static website:
+Open `http://127.0.0.1:3000` and use the credentials configured in the ignored
+`.env` file. Do not use the example placeholder password.
+
+### AWS deployment
+
+AWS resources are **not** created by this repository automatically. Terraform
+is split into a protected state-bucket bootstrap root and an independent
+application-infrastructure root. After account setup and explicit operator
+review, follow [AWS deployment](docs/deployment-aws.md). It covers state
+migration, OIDC, Terraform review, DNS/TLS, Ansible, and protected GitHub
+deployment. Never commit `.tfvars`, backend configuration, state, credentials,
+or private keys.
+
+## API
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /health` (proxied at `/api/health`) | Compatibility health response with service and release version |
+| `GET /livez` | Liveness probe |
+| `GET /readyz` | Readiness probe |
+| `GET /info` (proxied at `/api/info`) | Safe environment, version, uptime, and UTC timestamp |
+| `GET /metrics` | Prometheus metrics; scrape on the private network, not through public Nginx |
+
+Interactive API documentation and OpenAPI output are disabled by default.
+Nginx denies public access to metrics and OpenAPI paths. The API does not expose
+instance IDs, host details, credentials, or unrestricted diagnostics.
+
+## Repository map
+
+```text
+app/                         FastAPI app and runtime dependencies
+site/                        Static portfolio site
+deploy/systemd/              Existing systemd unit
+deploy/nginx/                Legacy, container, TLS, and balancing configs
+deploy/docker/               Non-root application image
+scripts/                     Legacy/container deployment and validation helpers
+tests/                       API and mocked container rollback tests
+ansible/                     Ubuntu hardening, Docker, and app deployment roles
+terraform/bootstrap/         Independent encrypted S3 state bucket
+terraform/infrastructure/    VPC, EC2, IAM, ECR, CloudWatch, optional OIDC roles
+.github/workflows/           CI, immutable image publishing, gated deployment
+monitoring/                  Prometheus, Alertmanager, and Grafana provisioning
+k8s/base/                    Optional Kubernetes manifests
+docs/                        Architecture, deployment, security, and operations
+Jenkinsfile                  Optional alternate CI pipeline
+```
+
+## Implementation and test status
+
+| Area | Status |
+|---|---|
+| Original systemd/Bash deployment and isolated rollback integration test | Preserved; mocked rollback test passed |
+| FastAPI endpoints, metrics, and configuration | Implemented; five API tests and Ruff passed |
+| Nginx headers, private API routing, metrics/OpenAPI restrictions | Implemented; parser check attempted, host test hit a log-file permission issue |
+| Docker image and Compose variants | Implemented; not built or runtime-validated (Docker Desktop WSL integration unavailable) |
+| Container deploy validation and rollback | Implemented; mock test covers healthy deployment, unhealthy rollback, and mutable-tag rejection |
+| Ubuntu Ansible roles | Implemented; syntax check passed with local Ansible 2.10.8; configured CI targets Ansible 2.19. Real-host connectivity requires the configured SSH key through SSM |
+| Terraform state and AWS infrastructure | Implemented; format and validation passed without AWS credentials; no plan/apply |
+| GitHub Actions / OIDC and Jenkins | Workflow files implemented; not run against GitHub or Jenkins |
+| Prometheus, Alertmanager, Grafana | Configuration implemented; `promtool`, `amtool`, and runtime not validated locally |
+| Kubernetes and Nginx replica example | Optional manifests/config implemented; not validated against a local cluster or runtime |
+| AWS, DNS, ACME certificate issuance/renewal, SSM deployment | Not deployed or tested; requires explicit operator setup and authorization |
+
+See [operations and recovery](docs/operations.md) for validation commands and
+limitations. The state migration and cloud cost/security assumptions are in
+[security and cost](docs/security-and-cost.md).
+
+## Local checks
+
+Python tests and lint:
 
 ```bash
-curl -i http://127.0.0.1:8080/
+python -m pip install -r requirements-dev.txt
+python -m pytest -q
+ruff check app tests
 ```
 
-Test the backend directly:
+Shell checks, including both rollback tests:
 
 ```bash
-curl -i http://127.0.0.1:8000/health
+bash -n scripts/deploy-ubuntu.sh scripts/deploy-container.sh
+shellcheck scripts/deploy-ubuntu.sh scripts/deploy-container.sh
+bash scripts/test-full-rollback-isolated.sh scripts/deploy-ubuntu.sh
+bash tests/test_deploy_container.sh
 ```
 
-Test the API through Nginx:
+Terraform (no AWS resources are provisioned by these validation commands):
 
 ```bash
-curl -i http://127.0.0.1:8080/api/health
-curl -i http://127.0.0.1:8080/api/info
+terraform fmt -check -recursive terraform
+for root in terraform/bootstrap terraform/infrastructure; do
+  terraform -chdir="$root" init -backend=false -input=false
+  terraform -chdir="$root" validate
+done
 ```
 
-Inspect application logs:
+Ansible syntax check:
 
 ```bash
-sudo journalctl -u linux-web-api -n 30 --no-pager
+cd ansible
+ansible-playbook --syntax-check -i inventory.example.ini site.yml
 ```
 
-Inspect Nginx logs:
+Compose validation requires a reachable Docker Engine:
 
 ```bash
-sudo tail -n 20 /var/log/nginx/linux-web-infrastructure.access.log
-sudo tail -n 20 /var/log/nginx/linux-web-infrastructure.error.log
+bash scripts/validate-compose.sh
 ```
 
-## Technologies
+## Further documentation
 
-- Ubuntu Linux on WSL2
-- Bash
-- Nginx
-- Python
-- FastAPI
-- Uvicorn
-- systemd
-- Git
-- curl
-- ShellCheck
-
-## Operational Challenges
-
-The first documented challenge is:
-
-**Challenge 01: Deployment Validation and Rollback**
-
-It simulates an invalid Python application deployment and verifies that
-the deployment process detects the error and restores the previous
-application files.
-
-Evidence and details are documented in:
-
-`docs/challenges/01-deployment-validation-and-rollback.md`
-
-## Planned Milestones
-
-1. HTTPS/TLS and certificate management.
-2. Ansible configuration management.
-3. Terraform infrastructure provisioning.
-4. Prometheus monitoring and alerting.
-5. Backup and recovery testing.
-6. Additional operational incident simulations.
-
-## Environment and Scope
-
-The current implementation runs locally in WSL2 Ubuntu.
-
-It is a learning and infrastructure engineering lab, not a production
-deployment. Cloud deployment will be considered after security,
-account access, and cost requirements are reviewed.
+- [Architecture and data flows](docs/architecture.md)
+- [AWS deployment and GitHub publication](docs/deployment-aws.md)
+- [Operations, validation, and recovery](docs/operations.md)
+- [Security assumptions and cost controls](docs/security-and-cost.md)

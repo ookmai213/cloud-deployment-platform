@@ -50,6 +50,8 @@ The application source contained invalid Python syntax.
 
 ## Validation
 
+- The following values are historical evidence from the original WSL2
+  exercise; they are not current process IDs or a claim about a live host.
 - Python compilation succeeded.
 - Nginx remained active.
 - FastAPI remained active.
