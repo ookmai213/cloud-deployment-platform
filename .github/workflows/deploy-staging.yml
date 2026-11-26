@@ -1,0 +1,104 @@
+name: Deploy staging image
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_digest:
+        description: Immutable ECR digest (sha256 followed by 64 lowercase hex characters)
+        required: true
+        type: string
+      release_version:
+        description: Safe display version (for example a Git commit SHA)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: staging-deployment
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: staging
+    timeout-minutes: 12
+    env:
+      AWS_REGION: ap-south-1
+      ECR_REPOSITORY_URL: ${{ vars.ECR_REPOSITORY_URL }}
+      EC2_INSTANCE_ID: ${{ vars.EC2_INSTANCE_ID }}
+      IMAGE_DIGEST: ${{ inputs.image_digest }}
+      RELEASE_VERSION: ${{ inputs.release_version }}
+    steps:
+      - name: Validate deployment inputs
+        shell: bash
+        run: |
+          [[ "$IMAGE_DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]] || {
+            echo "Invalid immutable image digest" >&2
+            exit 1
+          }
+          [[ "$RELEASE_VERSION" =~ ^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$ ]] || {
+            echo "Invalid release version" >&2
+            exit 1
+          }
+          [[ "$ECR_REPOSITORY_URL" =~ ^[0-9]{12}\.dkr\.ecr\.ap-south-1\.amazonaws\.com/linux-web-infrastructure$ ]] || {
+            echo "Set ECR_REPOSITORY_URL to the project's ap-south-1 ECR repository" >&2
+            exit 1
+          }
+          [[ "$EC2_INSTANCE_ID" =~ ^i-[0-9a-f]{8,17}$ ]] || {
+            echo "Set EC2_INSTANCE_ID to the staging EC2 instance" >&2
+            exit 1
+          }
+
+      - name: Configure short-lived AWS identity through OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: linux-web-deploy-${{ github.run_id }}
+
+      - name: Start deployment through Systems Manager
+        id: deploy
+        shell: bash
+        run: |
+          image="${ECR_REPOSITORY_URL}@${IMAGE_DIGEST}"
+          command="sudo /opt/linux-web-infrastructure/scripts/deploy-container.sh '$image' '$RELEASE_VERSION'"
+          parameters="$(jq -nc --arg command "$command" '{commands: [$command]}')"
+          command_id="$(aws ssm send-command \
+            --instance-ids "$EC2_INSTANCE_ID" \
+            --document-name AWS-RunShellScript \
+            --comment "Deploy linux-web-infrastructure ${RELEASE_VERSION}" \
+            --parameters "$parameters" \
+            --query 'Command.CommandId' \
+            --output text)"
+          echo "command_id=$command_id" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for deployment and health checks
+        shell: bash
+        run: |
+          for attempt in $(seq 1 60); do
+            status="$(aws ssm get-command-invocation \
+              --command-id '${{ steps.deploy.outputs.command_id }}' \
+              --instance-id "$EC2_INSTANCE_ID" \
+              --query Status \
+              --output text 2>/dev/null || printf 'Pending')"
+            case "$status" in
+              Success)
+                echo "Deployment and application health checks passed."
+                exit 0
+                ;;
+              Failed|Cancelled|TimedOut|Undeliverable|Terminated)
+                aws ssm get-command-invocation \
+                  --command-id '${{ steps.deploy.outputs.command_id }}' \
+                  --instance-id "$EC2_INSTANCE_ID" \
+                  --query '{Status:Status,Output:StandardOutputContent,Error:StandardErrorContent}' \
+                  --output json || true
+                exit 1
+                ;;
+            esac
+            sleep 5
+          done
+          echo "Timed out waiting for the SSM deployment command." >&2
+          exit 1

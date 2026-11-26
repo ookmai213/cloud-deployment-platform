@@ -1,0 +1,3 @@
+---
+hardening_ssh_service: ssh
+hardening_enable_automatic_security_updates: true

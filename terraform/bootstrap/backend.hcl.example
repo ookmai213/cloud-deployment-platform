@@ -1,0 +1,5 @@
+bucket       = "replace-with-unique-project-state-bucket"
+key          = "linux-web-infrastructure/bootstrap/terraform.tfstate"
+region       = "ap-south-1"
+encrypt      = true
+use_lockfile = true

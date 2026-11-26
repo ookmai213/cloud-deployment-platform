@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+cd {{ project_root | quote }}
+exec docker compose --env-file .env -f compose.yaml -f compose.cloud.yaml restart nginx

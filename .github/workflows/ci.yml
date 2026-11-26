@@ -1,0 +1,110 @@
+name: Continuous integration
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python-and-shell:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Install test dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements-dev.txt
+
+      - name: Lint Python
+        run: ruff check app tests
+
+      - name: Test FastAPI
+        run: python -m pytest -q
+
+      - name: Validate shell scripts
+        run: |
+          bash -n scripts/deploy-ubuntu.sh scripts/deploy-container.sh
+          bash -n scripts/test-full-rollback-isolated.sh scripts/validate-compose.sh tests/test_deploy_container.sh
+          shellcheck scripts/deploy-ubuntu.sh scripts/deploy-container.sh
+          bash scripts/test-full-rollback-isolated.sh scripts/deploy-ubuntu.sh
+          bash tests/test_deploy_container.sh
+
+      - name: Validate Compose configurations
+        run: bash scripts/validate-compose.sh
+
+      - name: Validate monitoring configuration
+        run: |
+          python -m json.tool monitoring/grafana/provisioning/dashboards/linux-web.json >/dev/null
+          docker run --rm \
+            --volume "$PWD/monitoring/prometheus:/etc/prometheus:ro" \
+            prom/prometheus:v3.5.0 \
+            promtool check config /etc/prometheus/prometheus.yml
+          docker run --rm \
+            --volume "$PWD/monitoring/alertmanager:/etc/alertmanager:ro" \
+            prom/alertmanager:v0.28.1 \
+            amtool check-config /etc/alertmanager/alertmanager.yml
+
+      - name: Build container image
+        run: |
+          docker build \
+            --file deploy/docker/Dockerfile \
+            --build-arg APP_VERSION="${GITHUB_SHA}" \
+            --tag linux-web-api:"${GITHUB_SHA}" \
+            .
+
+      - name: Scan container image
+        uses: aquasecurity/trivy-action@0.31.0
+        with:
+          image-ref: linux-web-api:${{ github.sha }}
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          vuln-type: os,library
+          severity: CRITICAL,HIGH
+
+  terraform-and-ansible:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.10.5
+
+      - name: Validate Terraform roots without remote state or AWS access
+        run: |
+          terraform fmt -check -recursive terraform
+          for root in terraform/bootstrap terraform/infrastructure; do
+            terraform -chdir="$root" init -backend=false -input=false
+            terraform -chdir="$root" validate
+          done
+
+      - name: Set up Python for Ansible validation
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Ansible validation tools
+        run: python -m pip install --disable-pip-version-check -r ansible/requirements-dev.txt
+
+      - name: Lint and syntax-check Ansible
+        working-directory: ansible
+        run: |
+          ansible-lint site.yml
+          ansible-playbook --syntax-check -i inventory.example.ini site.yml

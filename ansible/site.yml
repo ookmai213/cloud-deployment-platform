@@ -1,0 +1,9 @@
+---
+- name: Configure Ubuntu application host
+  hosts: web
+  become: true
+  gather_facts: true
+  roles:
+    - hardening
+    - docker
+    - application

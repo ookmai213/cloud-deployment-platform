@@ -1,0 +1,70 @@
+---
+- name: Ensure the target is Ubuntu
+  ansible.builtin.assert:
+    that:
+      - ansible_distribution == "Ubuntu"
+      - ansible_distribution_major_version | int >= 22
+    fail_msg: "This host role supports Ubuntu 22.04 LTS and newer only."
+
+- name: Install host security maintenance packages
+  ansible.builtin.apt:
+    name:
+      - unattended-upgrades
+      - ca-certificates
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Enable unattended security upgrades
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/20auto-upgrades
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      APT::Periodic::Update-Package-Lists "1";
+      APT::Periodic::Unattended-Upgrade "1";
+  when: hardening_enable_automatic_security_updates
+
+- name: Apply baseline kernel network hardening
+  ansible.builtin.copy:
+    dest: /etc/sysctl.d/60-linux-web-platform.conf
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      kernel.dmesg_restrict = 1
+      kernel.kptr_restrict = 2
+      net.ipv4.conf.all.accept_redirects = 0
+      net.ipv4.conf.default.accept_redirects = 0
+      net.ipv4.conf.all.send_redirects = 0
+      net.ipv4.conf.default.send_redirects = 0
+      net.ipv4.conf.all.accept_source_route = 0
+      net.ipv4.conf.default.accept_source_route = 0
+  notify: Apply sysctl settings
+
+- name: Disable password and root SSH access
+  ansible.builtin.copy:
+    dest: /etc/ssh/sshd_config.d/60-linux-web-platform.conf
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      PermitRootLogin no
+      PasswordAuthentication no
+      X11Forwarding no
+      MaxAuthTries 4
+  notify: Validate and reload SSH
+
+- name: Configure bounded persistent journal storage
+  ansible.builtin.copy:
+    dest: /etc/systemd/journald.conf.d/60-linux-web-platform.conf
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      [Journal]
+      Storage=persistent
+      SystemMaxUse=200M
+      RuntimeMaxUse=50M
+  notify: Restart systemd journal

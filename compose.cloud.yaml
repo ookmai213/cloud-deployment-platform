@@ -1,0 +1,21 @@
+services:
+  nginx:
+    ports:
+      - "80:8080"
+      - "443:8443"
+    logging:
+      driver: awslogs
+      options:
+        awslogs-region: ${AWS_REGION:-ap-south-1}
+        awslogs-group: /linux-web-infrastructure/containers
+        awslogs-create-group: "false"
+        awslogs-stream: "{{.Name}}"
+
+  api:
+    logging:
+      driver: awslogs
+      options:
+        awslogs-region: ${AWS_REGION:-ap-south-1}
+        awslogs-group: /linux-web-infrastructure/containers
+        awslogs-create-group: "false"
+        awslogs-stream: "{{.Name}}"

@@ -1,0 +1,37 @@
+name: Terraform validation
+
+on:
+  pull_request:
+    paths:
+      - "terraform/**"
+      - ".github/workflows/terraform-validate.yml"
+  push:
+    branches: [main]
+    paths:
+      - "terraform/**"
+      - ".github/workflows/terraform-validate.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.10.5
+      - name: Format and validate without AWS credentials or apply
+        run: |
+          terraform fmt -check -recursive terraform
+          for root in terraform/bootstrap terraform/infrastructure; do
+            terraform -chdir="$root" init -backend=false -input=false
+            terraform -chdir="$root" validate
+
+      - name: Validate Kubernetes manifests
+        run: |
+          docker run --rm \
+            --volume "$PWD/k8s:/work:ro" \
+            ghcr.io/yannh/kubeconform:v0.6.7 \
+            -strict -summary /work/base

@@ -1,0 +1,39 @@
+groups:
+  - name: linux-web-platform
+    rules:
+      - alert: ApplicationTargetDown
+        expr: up{job="linux-web-api"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: FastAPI metrics endpoint is unavailable
+          description: Prometheus has not scraped the FastAPI target successfully for two minutes.
+
+      - alert: ApplicationHighServerErrorRate
+        expr: |
+          (
+            sum(rate(http_requests_total{job="linux-web-api",status=~"5.."}[5m]))
+            /
+            clamp_min(sum(rate(http_requests_total{job="linux-web-api"}[5m])), 0.001)
+          ) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: FastAPI server error rate is elevated
+          description: More than five percent of observed requests returned a server error for five minutes.
+
+      - alert: HostDiskSpaceLow
+        expr: |
+          (
+            node_filesystem_avail_bytes{mountpoint="/",fstype!~"tmpfs|overlay"}
+            /
+            node_filesystem_size_bytes{mountpoint="/",fstype!~"tmpfs|overlay"}
+          ) < 0.10
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Host filesystem has less than ten percent free
+          description: Check host disk usage and container log retention.

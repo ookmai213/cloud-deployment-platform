@@ -1,0 +1,187 @@
+---
+- name: Validate deployment inputs
+  ansible.builtin.assert:
+    that:
+      - platform_domain is match("^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$")
+      - acme_email is match("^[^ ]+@[^ ]+\\.[^ ]+$")
+      - release_version is match("^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$")
+      - release_image is match("^[A-Za-z0-9][A-Za-z0-9.-]*(\\:[0-9]+)?/[A-Za-z0-9._/-]+@sha256:[a-f0-9]{64}$")
+    fail_msg: "Set a valid public domain, ACME email, and immutable image digest before deployment."
+
+- name: Create application directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: "{{ project_root }}", mode: "0755" }
+    - { path: "{{ project_root }}/deploy/nginx", mode: "0755" }
+    - { path: "{{ project_root }}/site", mode: "0755" }
+    - { path: "{{ project_root }}/scripts", mode: "0755" }
+    - { path: "{{ certbot_webroot }}", mode: "0755" }
+
+- name: Copy Compose deployment files
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../{{ item }}"
+    dest: "{{ project_root }}/{{ item }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - compose.yaml
+    - compose.cloud.yaml
+    - deploy/nginx/container-nginx.conf
+    - deploy/nginx/container-http.conf
+    - deploy/nginx/container-tls.conf.template
+    - site/index.html
+    - site/404.html
+    - site/favicon.svg
+    - site/styles.css
+    - site/app.js
+
+- name: Copy container deployment helper
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../scripts/deploy-container.sh"
+    dest: "{{ project_root }}/scripts/deploy-container.sh"
+    owner: root
+    group: root
+    mode: "0750"
+
+- name: Install Certbot
+  ansible.builtin.apt:
+    name: certbot
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Check for an existing TLS certificate
+  ansible.builtin.stat:
+    path: "{{ letsencrypt_root }}/live/{{ platform_domain }}/fullchain.pem"
+  register: tls_certificate
+
+- name: Write production Compose environment
+  ansible.builtin.template:
+    src: compose.env.j2
+    dest: "{{ project_root }}/.env"
+    owner: root
+    group: root
+    mode: "0600"
+    force: false
+
+- name: Select HTTP config for initial ACME validation
+  ansible.builtin.copy:
+    src: "{{ project_root }}/deploy/nginx/container-http.conf"
+    dest: "{{ project_root }}/deploy/nginx/runtime.conf"
+    remote_src: true
+    owner: root
+    group: root
+    mode: "0644"
+  when: not tls_certificate.stat.exists
+
+- name: Point Compose at runtime Nginx config
+  ansible.builtin.lineinfile:
+    path: "{{ project_root }}/.env"
+    regexp: "^NGINX_SITE_CONFIG="
+    line: "NGINX_SITE_CONFIG={{ project_root }}/deploy/nginx/runtime.conf"
+  no_log: true
+
+- name: Authenticate host Docker daemon to private ECR repository
+  ansible.builtin.shell: |
+    set -o pipefail
+    aws ecr get-login-password --region {{ aws_region | quote }} |
+      docker login --username AWS --password-stdin {{ release_image.split('/')[0] | quote }}
+  args:
+    executable: /bin/bash
+  changed_when: false
+  no_log: true
+
+- name: Ensure Compose platform settings are current without replacing release state
+  ansible.builtin.lineinfile:
+    path: "{{ project_root }}/.env"
+    regexp: "^{{ item.key }}="
+    line: "{{ item.key }}={{ item.value }}"
+    create: true
+    owner: root
+    group: root
+    mode: "0600"
+  loop:
+    - { key: APP_ENV, value: production }
+    - { key: AWS_REGION, value: "{{ aws_region }}" }
+    - { key: NGINX_SITE_CONFIG, value: "{{ project_root }}/deploy/nginx/runtime.conf" }
+    - { key: CERTBOT_WEBROOT, value: "{{ certbot_webroot }}" }
+    - { key: CERTBOT_CONFIG, value: "{{ letsencrypt_root }}" }
+  no_log: true
+
+- name: Deploy immutable release using the rollback-aware helper
+  ansible.builtin.command:
+    argv:
+      - "{{ project_root }}/scripts/deploy-container.sh"
+      - "{{ release_image }}"
+      - "{{ release_version }}"
+  environment:
+    COMPOSE_ENV_FILE: "{{ project_root }}/.env"
+  register: app_deploy_result
+  changed_when: "'New deployment passed' in app_deploy_result.stdout"
+
+- name: Request Let's Encrypt certificate if absent
+  ansible.builtin.command:
+    argv:
+      - certbot
+      - certonly
+      - --webroot
+      - --webroot-path
+      - "{{ certbot_webroot }}"
+      - --domain
+      - "{{ platform_domain }}"
+      - --email
+      - "{{ acme_email }}"
+      - --agree-tos
+      - --non-interactive
+  args:
+    creates: "{{ letsencrypt_root }}/live/{{ platform_domain }}/fullchain.pem"
+  changed_when: true
+  when: not tls_certificate.stat.exists
+
+- name: Render HTTPS Nginx configuration for the configured domain
+  ansible.builtin.template:
+    src: nginx-tls.conf.j2
+    dest: "{{ project_root }}/deploy/nginx/runtime.conf"
+    owner: root
+    group: root
+    mode: "0644"
+  register: tls_config
+
+- name: Validate and reload HTTPS configuration
+  ansible.builtin.shell: |
+    set -Eeuo pipefail
+    docker compose --env-file .env -f compose.yaml -f compose.cloud.yaml exec -T nginx nginx -t
+    docker compose --env-file .env -f compose.yaml -f compose.cloud.yaml exec -T nginx nginx -s reload
+  args:
+    chdir: "{{ project_root }}"
+    executable: /bin/bash
+  when: tls_config.changed
+  changed_when: true
+
+- name: Ensure Certbot renewal hook directory exists
+  ansible.builtin.file:
+    path: "{{ letsencrypt_root }}/renewal-hooks/deploy"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install Certbot renewal deploy hook
+  ansible.builtin.template:
+    src: certbot-reload-nginx.sh.j2
+    dest: /etc/letsencrypt/renewal-hooks/deploy/50-reload-platform-nginx
+    owner: root
+    group: root
+    mode: "0750"
+
+- name: Enable Certbot renewal timer
+  ansible.builtin.systemd:
+    name: certbot.timer
+    enabled: true
+    state: started

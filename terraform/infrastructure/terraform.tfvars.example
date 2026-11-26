@@ -1,0 +1,14 @@
+aws_region                 = "ap-south-1"
+environment                = "staging"
+instance_type              = "t3.small"
+# Create this EC2 key pair in ap-south-1 only if using Ansible over an SSM SSH tunnel.
+# Keep its private key outside this repository.
+ec2_key_pair_name           = ""
+allocate_elastic_ip        = true
+http_ingress_cidrs          = ["0.0.0.0/0"]
+https_ingress_cidrs         = ["0.0.0.0/0"]
+cloudwatch_log_retention_days = 30
+
+# Configure only after the account-level GitHub OIDC provider exists.
+# github_oidc_provider_arn = "arn:aws:iam::000000000000:oidc-provider/token.actions.githubusercontent.com"
+# github_repository        = "owner/repository"

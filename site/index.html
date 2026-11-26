@@ -3,63 +3,81 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#101827">
+    <meta name="description" content="A secure, observable application hosting platform built with Linux, FastAPI, Nginx, containers and infrastructure as code.">
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-    <title>Linux Web Infrastructure Lab</title>
-    <style>
-        body {
-            max-width: 760px;
-            margin: 60px auto;
-            padding: 0 24px;
-            font-family: Arial, sans-serif;
-            line-height: 1.7;
-            color: #202938;
-            background: #f5f7fa;
-        }
-        main {
-            background: white;
-            padding: 32px;
-            border-radius: 12px;
-        }
-        h1 { color: #174ea6; }
-        code {
-            background: #eef2f7;
-            padding: 3px 6px;
-            border-radius: 4px;
-        }
-    </style>
+    <link rel="stylesheet" href="/styles.css">
+    <title>Cloud Deployment Platform</title>
 </head>
 <body>
+    <header class="site-header">
+        <a class="brand" href="/" aria-label="Cloud Deployment Platform home">
+            <span class="brand-mark" aria-hidden="true">L</span>
+            <span>Cloud Deployment Platform</span>
+        </a>
+        <span class="header-label">Platform engineering portfolio</span>
+    </header>
     <main>
-        <h1>Linux Web Infrastructure Lab</h1>
-        <p>This website is served by Nginx on a local Linux environment.</p>
-        <h2>Current milestone</h2>
-        <p>Static web hosting and Nginx configuration.</p>
-        <h2>Infrastructure roadmap</h2>
-        <ul>
-            <li>Linux administration and troubleshooting</li>
-            <li>Nginx reverse proxy and application services</li>
-            <li>HTTPS/TLS and secure configuration</li>
-            <li>Ansible automation and Terraform</li>
-            <li>Monitoring, backups, and recovery</li>
-        </ul>
-        <h2>Backend API</h2>
-        <p id="api-status">Checking backend health...</p>
-        <script>
-          fetch("/api/health")
-            .then(response => {
-              if (!response.ok) throw new Error("HTTP " + response.status);
-              return response.json();
-            })
-            .then(data => {
-              document.getElementById("api-status").textContent =
-                "API status: " + data.status;
-            })
-            .catch(() => {
-              document.getElementById("api-status").textContent =
-                "API unavailable. Check the backend service.";
-            });
-        </script>
-        <p>Environment: Ubuntu on WSL2</p>
+        <section class="hero">
+            <p class="eyebrow">Secure · Observable · Reproducible</p>
+            <h1>Application hosting,<br>built like a platform.</h1>
+            <p class="lead">A practical Linux hosting platform demonstrating safe deployments, infrastructure as code, container operations and service reliability.</p>
+            <div class="status-pill"><span class="status-dot" aria-hidden="true"></span><span id="api-status" role="status">Checking service availability...</span></div>
+        </section>
+
+        <section class="section" aria-labelledby="architecture-title">
+            <div class="section-heading">
+                <p class="eyebrow">The platform</p>
+                <h2 id="architecture-title">A clear path from request to response</h2>
+                <p>Public traffic terminates at Nginx. The API stays behind the proxy, while deployment and operations are handled through repeatable automation.</p>
+            </div>
+            <div class="architecture" aria-label="Request flow: visitor to Nginx to private FastAPI service">
+                <article class="architecture-card"><span class="card-index">01</span><h3>Web entry</h3><p>HTTPS, static site, and reverse proxy</p><span class="tag">Nginx</span></article>
+                <span class="flow-arrow" aria-hidden="true">→</span>
+                <article class="architecture-card"><span class="card-index">02</span><h3>Application</h3><p>Health, service information, and metrics</p><span class="tag">FastAPI</span></article>
+                <span class="flow-arrow" aria-hidden="true">→</span>
+                <article class="architecture-card"><span class="card-index">03</span><h3>Operations</h3><p>Provision, deploy, observe, recover</p><span class="tag">IaC + CI/CD</span></article>
+            </div>
+        </section>
+
+        <section class="section" aria-labelledby="capabilities-title">
+            <div class="section-heading">
+                <p class="eyebrow">Engineering capabilities</p>
+                <h2 id="capabilities-title">Designed for repeatable operations</h2>
+            </div>
+            <div class="capability-grid">
+                <article class="capability"><h3>Safe deployment</h3><p>Preflight checks, health verification, retained backups, and tested recovery paths.</p></article>
+                <article class="capability"><h3>Infrastructure as code</h3><p>Versioned infrastructure and host configuration with reviewable plans and idempotent automation.</p></article>
+                <article class="capability"><h3>Observability</h3><p>Service health and low-cardinality metrics designed to support actionable monitoring.</p></article>
+            </div>
+        </section>
+
+        <section class="section service-panel" aria-labelledby="service-title">
+            <div>
+                <p class="eyebrow">Live service information</p>
+                <h2 id="service-title">A small, safe API surface</h2>
+                <p>The public endpoints report service health and release metadata without exposing host identifiers or infrastructure internals.</p>
+            </div>
+            <dl class="service-details">
+                <div><dt>Service</dt><dd id="service-name">Loading...</dd></div>
+                <div><dt>Release</dt><dd id="service-version">Loading...</dd></div>
+                <div><dt>Environment</dt><dd id="service-environment">Loading...</dd></div>
+            </dl>
+        </section>
+
+        <section class="section links-section" aria-labelledby="links-title">
+            <div class="section-heading">
+                <p class="eyebrow">Explore the project</p>
+                <h2 id="links-title">Built to be inspected</h2>
+            </div>
+            <div class="project-links">
+                <a href="https://github.com/ookmai213/cloud-deployment-platform">Source repository <span aria-hidden="true">↗</span></a>
+                <a href="/api/health">API health <span aria-hidden="true">↗</span></a>
+                <a href="/api/info">Service information <span aria-hidden="true">↗</span></a>
+            </div>
+        </section>
     </main>
+    <footer><span>Cloud Deployment Platform</span><span>Built for reliable, understandable operations.</span></footer>
+    <script src="/app.js" defer></script>
 </body>
 </html>
