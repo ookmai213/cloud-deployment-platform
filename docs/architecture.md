@@ -86,14 +86,20 @@ The deployment role trust is limited to the repository's protected GitHub
 tag. The helper keeps a temporary copy of the previous environment and
 restores the recorded image/version if checks fail. A first deployment has no
 previous release to restore. The helper's rollback is tested with fake Docker
-commands; a real container-runtime failure/recovery test remains outstanding.
+commands; real deployment rollback remains unverified. A local Docker
+process-crash test confirmed that the API container restarts and returns
+healthy.
 
 ## Optional/advanced components
 
-- `compose.monitoring.yaml`: private Prometheus, Alertmanager, and Node
-  Exporter networks; Grafana is only published to `127.0.0.1`.
+- `compose.monitoring.yaml`: Prometheus, Alertmanager, and Node Exporter use
+  the private monitoring network. Grafana also joins a dedicated UI network so
+  its host-published port works while remaining bound to `127.0.0.1`. Under
+  Docker Desktop/WSL, `/` is not a shared mount, so Node Exporter cannot use
+  `rslave`; the read-only root mount works without propagation, but nested
+  mount changes are not propagated.
 - `compose.load-balancing.yaml`: Nginx upstream example; scale the API service
-  separately and verify DNS/service discovery on the selected Docker Engine.
+  separately. Two-replica balancing was verified locally.
 - `k8s/base/`: two-replica API Deployment, ClusterIP Service, ConfigMap,
   resource limits, non-root security context, and probes. It is not part of
   the one-VM deployment and is not a managed cluster installation.

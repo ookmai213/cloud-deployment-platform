@@ -64,6 +64,7 @@ services:
       - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
     networks:
       - monitoring
+      - grafana-access
     restart: unless-stopped
     read_only: true
     tmpfs:
@@ -86,7 +87,7 @@ services:
     volumes:
       - /proc:/host/proc:ro
       - /sys:/host/sys:ro
-      - /:/host:ro,rslave
+      - /:/host:ro
     networks:
       - monitoring
     restart: unless-stopped
@@ -100,6 +101,8 @@ services:
 networks:
   monitoring:
     internal: true
+  grafana-access:
+    driver: bridge
 
 volumes:
   prometheus-data:

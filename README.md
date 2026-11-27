@@ -10,10 +10,12 @@ Gateway, load balancer, bastion, or managed Kubernetes cluster.
 > **Scope and verification:** This repository contains local implementations
 > and validation results, not a claim that AWS resources have been deployed.
 > The existing systemd rollback test and the new container deployment tests
-> use mocked system/service boundaries. Docker Engine integration is not
-> available in the current WSL workspace, so image builds, Compose runtime,
-> monitoring services, and load balancing still require validation on a
-> Docker-enabled host. See [implementation status](#implementation-and-test-status).
+> use mocked system/service boundaries. The local Docker image build and
+> Docker Desktop/WSL tests for the app, two-replica load balancing, monitoring,
+> and container recovery passed. GitHub CI, Trivy, Terraform, Ansible, and
+> Kubernetes schema validation passed before merge commit `bc08db4`. AWS
+> deployment and related live integrations remain unverified.
+> See [implementation status](#implementation-and-test-status).
 
 ## Architecture
 
@@ -137,15 +139,16 @@ Jenkinsfile                  Optional alternate CI pipeline
 |---|---|
 | Original systemd/Bash deployment and isolated rollback integration test | Preserved; mocked rollback test passed |
 | FastAPI endpoints, metrics, and configuration | Implemented; five API tests and Ruff passed |
-| Nginx headers, private API routing, metrics/OpenAPI restrictions | Implemented; parser check attempted, host test hit a log-file permission issue |
-| Docker image and Compose variants | Implemented; not built or runtime-validated (Docker Desktop WSL integration unavailable) |
-| Container deploy validation and rollback | Implemented; mock test covers healthy deployment, unhealthy rollback, and mutable-tag rejection |
-| Ubuntu Ansible roles | Implemented; syntax check passed with local Ansible 2.10.8; configured CI targets Ansible 2.19. Real-host connectivity requires the configured SSH key through SSM |
-| Terraform state and AWS infrastructure | Implemented; format and validation passed without AWS credentials; no plan/apply |
-| GitHub Actions / OIDC and Jenkins | Initial GitHub CI failed during action setup and Ansible lint; fixes under review. AWS OIDC and Jenkins remain untested |
-| Prometheus, Alertmanager, Grafana | Configuration implemented; `promtool`, `amtool`, and runtime not validated locally |
-| Kubernetes and Nginx replica example | Optional manifests/config implemented; not validated against a local cluster or runtime |
-| AWS, DNS, ACME certificate issuance/renewal, SSM deployment | Not deployed or tested; requires explicit operator setup and authorization |
+| Nginx headers, private API routing, metrics/OpenAPI restrictions | Implemented; local HTTP routes, headers, and private-network isolation passed |
+| Docker image and Compose variants | Local image build, Compose configurations, and Docker Desktop runtime passed |
+| Container deploy validation and rollback | Mock tests cover healthy deployment and rollback; real deployment rollback remains unverified |
+| Ubuntu Ansible roles | Ansible validation passed before merge `bc08db4`; real-host connectivity and SSM operations remain unverified |
+| Terraform state and AWS infrastructure | Terraform validation passed before merge `bc08db4`; no AWS plan or apply was run |
+| GitHub Actions and Trivy | GitHub CI and Trivy security scan passed before merge `bc08db4` |
+| Jenkins and AWS OIDC | Unverified |
+| Prometheus, Alertmanager, Grafana, Node Exporter | Local scraping, dashboard, alert ingestion, and host metrics passed; external alert delivery is unverified |
+| Kubernetes | Schema validation passed before merge `bc08db4`; cluster runtime remains unverified |
+| AWS deployment, SSM, DNS, and TLS | Not deployed or tested; requires explicit operator setup and authorization |
 
 See [operations and recovery](docs/operations.md) for validation commands and
 limitations. The state migration and cloud cost/security assumptions are in

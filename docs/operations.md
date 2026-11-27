@@ -77,6 +77,11 @@ latencies, host metrics, and evaluates Prometheus rules. Grafana listens only
 on host loopback. Use an SSH/SSM port-forward or another approved private
 access path to reach it remotely.
 
+Docker Desktop/WSL does not support the `rslave` propagation mode for the
+Node Exporter root mount when `/` is not a shared mount. The Compose
+configuration uses a read-only root mount without propagation instead; host
+metrics were verified locally, but nested mount changes do not propagate.
+
 Alertmanager currently routes to a discard receiver: alerts are not delivered
 to email/chat/on-call. Configure and test an approved receiver (with secrets
 outside the repository) before relying on notifications. CloudWatch has EC2
@@ -102,14 +107,18 @@ cd ansible
 ansible-playbook --syntax-check -i inventory.example.ini site.yml
 ```
 
-Current repository validation: API tests (5 passed), Ruff, both isolated
-rollback scripts, shell syntax/ShellCheck, Ansible syntax check, Terraform
-format/init/validate, and Grafana dashboard JSON parsing passed. The systemd
-rollback test uses mocks. A host Nginx parser recognized the configuration but
-its final test was blocked opening `/var/log/nginx/error.log` as the unprivileged
-WSL user. Docker Desktop integration is disabled in this workspace; Compose,
-container build, monitoring parsers, and Kubernetes schema/cluster validation
-remain pending. CI and cloud workflows have not been run.
+Local validation passed for the Docker image build, API tests (5 passed), Ruff,
+Compose configuration/runtime, website rendering, API routes and security
+headers, private API networking, two-replica load balancing, Prometheus
+scraping, Grafana dashboard provisioning, Alertmanager alert ingestion, Node
+Exporter metrics, and API process-crash recovery. Before merge commit
+`bc08db4`, GitHub CI, Trivy, Terraform validation, Ansible validation, and
+Kubernetes schema validation passed. Systemd and container deployment rollback
+tests use mocks.
+
+Kubernetes cluster runtime, Jenkins, AWS deployment, OIDC, SSM, DNS/TLS,
+external alert delivery, and real deployment rollback remain unverified. No
+AWS resources were created.
 
 ## Troubleshooting
 
