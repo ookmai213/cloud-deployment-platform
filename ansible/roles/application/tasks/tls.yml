@@ -1,0 +1,35 @@
+---
+- name: Create restricted certificate export directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: "101"
+    mode: "0750"
+  loop:
+    - "{{ project_root }}/tls/live"
+    - "{{ project_root }}/tls/live/{{ platform_domain }}"
+
+- name: Copy only the domain certificate and key for unprivileged Nginx
+  ansible.builtin.copy:
+    src: "{{ letsencrypt_root }}/live/{{ platform_domain }}/{{ item.name }}"
+    dest: "{{ project_root }}/tls/live/{{ platform_domain }}/{{ item.name }}"
+    remote_src: true
+    owner: root
+    group: "101"
+    mode: "{{ item.mode }}"
+  loop:
+    - { name: fullchain.pem, mode: "0644" }
+    - { name: privkey.pem, mode: "0640" }
+  no_log: true
+  diff: false
+  notify: Validate and recreate platform Nginx
+
+- name: Render HTTPS Nginx configuration for the configured domain
+  ansible.builtin.template:
+    src: nginx-tls.conf.j2
+    dest: "{{ project_root }}/deploy/nginx/runtime.conf"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Validate and recreate platform Nginx

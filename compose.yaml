@@ -47,12 +47,14 @@ services:
 
   nginx:
     image: ${NGINX_IMAGE:-nginxinc/nginx-unprivileged:1.28-alpine}
+    user: "101:101"
     depends_on:
       api:
         condition: service_healthy
     ports: []
     networks:
       - application
+      - edge
     restart: unless-stopped
     read_only: true
     tmpfs:
@@ -87,3 +89,4 @@ services:
 networks:
   application:
     internal: true
+  edge:

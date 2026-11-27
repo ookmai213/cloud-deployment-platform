@@ -9,6 +9,7 @@ trap 'rm -rf -- "$TEST_ROOT"' EXIT
 mkdir -p "$TEST_ROOT/bin"
 ENV_FILE="$TEST_ROOT/deploy.env"
 ACTIVE_IMAGE_FILE="$TEST_ROOT/active-image"
+export TEST_NGINX_STARTED_FILE="$TEST_ROOT/nginx-started"
 cat > "$ENV_FILE" <<'EOF'
 APP_ENV=staging
 APP_VERSION=previous
@@ -42,12 +43,23 @@ while (($#)); do
         -f) shift 2 ;;
         pull) exit 0 ;;
         up)
+            if [[ "${*: -1}" == "nginx" ]]; then
+                touch "$TEST_NGINX_STARTED_FILE"
+                exit 0
+            fi
             image="$(awk -F= '$1 == "API_IMAGE" {sub(/^[^=]*=/, ""); print; exit}' "$TEST_ENV_FILE")"
             printf '%s\n' "$image" > "$TEST_ACTIVE_IMAGE_FILE"
             exit 0
             ;;
-        ps) printf 'mock-container-id\n'; exit 0 ;;
+        ps)
+            if [[ "${*: -1}" == "nginx" && ! -f "$TEST_NGINX_STARTED_FILE" ]]; then
+                exit 0
+            fi
+            printf 'mock-container-id\n'
+            exit 0
+            ;;
         exec)
+            [[ -f "$TEST_NGINX_STARTED_FILE" && "${*: -1}" == "http://127.0.0.1:8080/healthz" ]] || exit 1
             image="$(cat "$TEST_ACTIVE_IMAGE_FILE")"
             if [[ "${SIMULATE_NEW_FAILURE:-0}" == "1" && "$image" == *"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" ]]; then
                 exit 1

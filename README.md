@@ -142,7 +142,7 @@ Jenkinsfile                  Optional alternate CI pipeline
 | Container deploy validation and rollback | Implemented; mock test covers healthy deployment, unhealthy rollback, and mutable-tag rejection |
 | Ubuntu Ansible roles | Implemented; syntax check passed with local Ansible 2.10.8; configured CI targets Ansible 2.19. Real-host connectivity requires the configured SSH key through SSM |
 | Terraform state and AWS infrastructure | Implemented; format and validation passed without AWS credentials; no plan/apply |
-| GitHub Actions / OIDC and Jenkins | Workflow files implemented; not run against GitHub or Jenkins |
+| GitHub Actions / OIDC and Jenkins | Initial GitHub CI failed during action setup and Ansible lint; fixes under review. AWS OIDC and Jenkins remain untested |
 | Prometheus, Alertmanager, Grafana | Configuration implemented; `promtool`, `amtool`, and runtime not validated locally |
 | Kubernetes and Nginx replica example | Optional manifests/config implemented; not validated against a local cluster or runtime |
 | AWS, DNS, ACME certificate issuance/renewal, SSM deployment | Not deployed or tested; requires explicit operator setup and authorization |

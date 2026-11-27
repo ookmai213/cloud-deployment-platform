@@ -59,7 +59,15 @@
 - name: Check for an existing TLS certificate
   ansible.builtin.stat:
     path: "{{ letsencrypt_root }}/live/{{ platform_domain }}/fullchain.pem"
-  register: tls_certificate
+  register: application_tls_certificate
+
+- name: Restrict the exported certificate directory to the Nginx group
+  ansible.builtin.file:
+    path: "{{ project_root }}/tls"
+    state: directory
+    owner: root
+    group: "101"
+    mode: "0750"
 
 - name: Write production Compose environment
   ansible.builtin.template:
@@ -78,7 +86,7 @@
     owner: root
     group: root
     mode: "0644"
-  when: not tls_certificate.stat.exists
+  when: not application_tls_certificate.stat.exists
 
 - name: Point Compose at runtime Nginx config
   ansible.builtin.lineinfile:
@@ -111,8 +119,12 @@
     - { key: AWS_REGION, value: "{{ aws_region }}" }
     - { key: NGINX_SITE_CONFIG, value: "{{ project_root }}/deploy/nginx/runtime.conf" }
     - { key: CERTBOT_WEBROOT, value: "{{ certbot_webroot }}" }
-    - { key: CERTBOT_CONFIG, value: "{{ letsencrypt_root }}" }
+    - { key: CERTBOT_CONFIG, value: "{{ project_root }}/tls" }
   no_log: true
+
+- name: Prepare existing certificate before deploying
+  ansible.builtin.include_tasks: tls.yml
+  when: application_tls_certificate.stat.exists
 
 - name: Deploy immutable release using the rollback-aware helper
   ansible.builtin.command:
@@ -122,8 +134,8 @@
       - "{{ release_version }}"
   environment:
     COMPOSE_ENV_FILE: "{{ project_root }}/.env"
-  register: app_deploy_result
-  changed_when: "'New deployment passed' in app_deploy_result.stdout"
+  register: application_deploy_result
+  changed_when: "'New deployment passed' in application_deploy_result.stdout"
 
 - name: Request Let's Encrypt certificate if absent
   ansible.builtin.command:
@@ -142,27 +154,14 @@
   args:
     creates: "{{ letsencrypt_root }}/live/{{ platform_domain }}/fullchain.pem"
   changed_when: true
-  when: not tls_certificate.stat.exists
+  when: not application_tls_certificate.stat.exists
 
-- name: Render HTTPS Nginx configuration for the configured domain
-  ansible.builtin.template:
-    src: nginx-tls.conf.j2
-    dest: "{{ project_root }}/deploy/nginx/runtime.conf"
-    owner: root
-    group: root
-    mode: "0644"
-  register: tls_config
+- name: Prepare the newly issued certificate
+  ansible.builtin.include_tasks: tls.yml
+  when: not application_tls_certificate.stat.exists
 
-- name: Validate and reload HTTPS configuration
-  ansible.builtin.shell: |
-    set -Eeuo pipefail
-    docker compose --env-file .env -f compose.yaml -f compose.cloud.yaml exec -T nginx nginx -t
-    docker compose --env-file .env -f compose.yaml -f compose.cloud.yaml exec -T nginx nginx -s reload
-  args:
-    chdir: "{{ project_root }}"
-    executable: /bin/bash
-  when: tls_config.changed
-  changed_when: true
+- name: Apply TLS configuration before completing the role
+  ansible.builtin.meta: flush_handlers
 
 - name: Ensure Certbot renewal hook directory exists
   ansible.builtin.file:

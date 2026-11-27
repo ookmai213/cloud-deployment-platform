@@ -119,7 +119,7 @@ wait_healthy() {
 
 smoke_test() {
     local body
-    body="$("${COMPOSE[@]}" exec -T nginx wget -qO- http://127.0.0.1:8080/api/health)" || return 1
+    body="$("${COMPOSE[@]}" exec -T nginx wget -qO- http://127.0.0.1:8080/healthz)" || return 1
     [[ "$body" == *'"status":"ok"'* ]]
 }
 
@@ -161,6 +161,7 @@ if ! write_release "$NEW_IMAGE" "$NEW_VERSION" ||
    ! "${COMPOSE[@]}" pull api ||
    ! "${COMPOSE[@]}" up -d --no-build api ||
    ! wait_healthy api ||
+   ! "${COMPOSE[@]}" up -d --no-build --no-deps --force-recreate nginx ||
    ! wait_healthy nginx ||
    ! smoke_test; then
     error "New deployment failed validation; restoring the previous image reference."
@@ -170,6 +171,7 @@ if ! write_release "$NEW_IMAGE" "$NEW_VERSION" ||
         if "${COMPOSE[@]}" pull api &&
            "${COMPOSE[@]}" up -d --no-build api &&
            wait_healthy api &&
+           "${COMPOSE[@]}" up -d --no-build --no-deps --force-recreate nginx &&
            wait_healthy nginx &&
            smoke_test; then
             rm -f -- "$BACKUP_ENV"

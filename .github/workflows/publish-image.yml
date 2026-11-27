@@ -1,11 +1,11 @@
 name: Publish immutable image
 
 on:
-  push:
-    branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
+  actions: read
   id-token: write
 
 concurrency:
@@ -14,12 +14,20 @@ concurrency:
 
 jobs:
   publish:
-    if: ${{ vars.AWS_PUBLISH_ROLE_ARN != '' && vars.ECR_REPOSITORY_URL != '' }}
+    if: ${{ github.ref == 'refs/heads/main' && vars.AWS_PUBLISH_ROLE_ARN != '' && vars.ECR_REPOSITORY_URL != '' }}
     runs-on: ubuntu-latest
     env:
       AWS_REGION: ap-south-1
       ECR_REPOSITORY_URL: ${{ vars.ECR_REPOSITORY_URL }}
     steps:
+      - name: Require successful CI for this exact main commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          successful_runs="$(gh api --method GET "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs" -f head_sha="${GITHUB_SHA}" -f branch=main -f event=push -f status=success --jq '.total_count')"
+          test "$successful_runs" -gt 0
+
       - name: Check out source
         uses: actions/checkout@v4
 
@@ -50,7 +58,7 @@ jobs:
           sbom: true
 
       - name: Scan the published immutable image
-        uses: aquasecurity/trivy-action@0.31.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: ${{ env.ECR_REPOSITORY_URL }}@${{ steps.build.outputs.digest }}
           format: table

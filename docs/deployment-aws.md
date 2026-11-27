@@ -111,11 +111,11 @@ After reviewing `git status` and the final diff:
 6. Confirm the AWS OIDC trust policy's repository and subject conditions
    match the exact owner/repository, `main`, and `staging` environment.
 
-The `Publish immutable image` workflow runs on a push to `main` when its
-required variables exist. It runs build and vulnerability scanning and reports
-an ECR digest. The manual `Deploy staging image` workflow requires that digest
+The `Publish immutable image` workflow is manually dispatched on `main` after
+successful CI for the exact commit, and only when the required AWS variables
+exist. It builds and scans an image and reports an ECR digest. The manual `Deploy staging image` workflow requires that digest
 and a safe release label. It runs only in the protected `staging` environment.
-GitHub workflows have not been executed against a published repository.
+The initial CI run exposed a scanner reference and Ansible lint failures; see the repository Actions tab for current validation results. AWS workflows remain untested.
 
 ## 4. Configure DNS, TLS, and the first release
 
