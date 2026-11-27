@@ -51,12 +51,14 @@ jobs:
           python -m json.tool monitoring/grafana/provisioning/dashboards/linux-web.json >/dev/null
           docker run --rm \
             --volume "$PWD/monitoring/prometheus:/etc/prometheus:ro" \
+            --entrypoint /bin/promtool \
             prom/prometheus:v3.5.0 \
-            promtool check config /etc/prometheus/prometheus.yml
+            check config /etc/prometheus/prometheus.yml
           docker run --rm \
             --volume "$PWD/monitoring/alertmanager:/etc/alertmanager:ro" \
+            --entrypoint /bin/amtool \
             prom/alertmanager:v0.28.1 \
-            amtool check-config /etc/alertmanager/alertmanager.yml
+            check-config /etc/alertmanager/alertmanager.yml
 
       - name: Build container image
         run: |
@@ -66,8 +68,31 @@ jobs:
             --tag linux-web-api:"${GITHUB_SHA}" \
             .
 
+      - name: Smoke-test the local Compose stack
+        run: |
+          export API_IMAGE=linux-web-api:"${GITHUB_SHA}"
+          export APP_VERSION="${GITHUB_SHA}"
+          docker compose -f compose.yaml -f compose.override.yaml up -d --no-build --wait --wait-timeout 120
+          curl --fail --silent --show-error http://127.0.0.1:8080/api/health | python -c 'import json, sys; assert json.load(sys.stdin)["status"] == "ok"'
+          curl --fail --silent --show-error http://127.0.0.1:8080/ >/dev/null
+          curl --fail --silent --show-error http://127.0.0.1:8080/api/info | python -c 'import json, os, sys; assert json.load(sys.stdin)["version"] == os.environ["GITHUB_SHA"]'
+          test "$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:8080/api/metrics)" = 404
+
+      - name: Capture Compose diagnostics on failure
+        if: failure()
+        run: |
+          docker compose -f compose.yaml -f compose.override.yaml ps -a
+          docker compose -f compose.yaml -f compose.override.yaml logs --no-color --tail=100
+          for id in $(docker compose -f compose.yaml -f compose.override.yaml ps -aq); do
+            docker inspect --format '{{json .State}}' "$id"
+          done
+
+      - name: Stop the local Compose stack
+        if: always()
+        run: docker compose -f compose.yaml -f compose.override.yaml down --remove-orphans
+
       - name: Scan container image
-        uses: aquasecurity/trivy-action@0.31.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: linux-web-api:${{ github.sha }}
           format: table

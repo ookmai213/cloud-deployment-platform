@@ -1,0 +1,11 @@
+---
+- name: Validate and recreate platform Nginx
+  ansible.builtin.shell: |
+    set -Eeuo pipefail
+    docker compose --env-file .env -f compose.yaml -f compose.cloud.yaml run --rm --no-deps nginx nginx -t
+    docker compose --env-file .env -f compose.yaml -f compose.cloud.yaml up -d --no-deps --force-recreate nginx
+    docker compose --env-file .env -f compose.yaml -f compose.cloud.yaml exec -T nginx nginx -t
+  args:
+    chdir: "{{ project_root }}"
+    executable: /bin/bash
+  changed_when: true

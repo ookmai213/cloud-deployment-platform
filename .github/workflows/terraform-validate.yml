@@ -4,11 +4,13 @@ on:
   pull_request:
     paths:
       - "terraform/**"
+      - "k8s/**"
       - ".github/workflows/terraform-validate.yml"
   push:
     branches: [main]
     paths:
       - "terraform/**"
+      - "k8s/**"
       - ".github/workflows/terraform-validate.yml"
 
 permissions:
@@ -28,10 +30,11 @@ jobs:
           for root in terraform/bootstrap terraform/infrastructure; do
             terraform -chdir="$root" init -backend=false -input=false
             terraform -chdir="$root" validate
+          done
 
       - name: Validate Kubernetes manifests
         run: |
           docker run --rm \
             --volume "$PWD/k8s:/work:ro" \
             ghcr.io/yannh/kubeconform:v0.6.7 \
-            -strict -summary /work/base
+            -strict -summary -skip Kustomization /work/base

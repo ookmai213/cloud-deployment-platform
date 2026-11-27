@@ -1,4 +1,15 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 cd {{ project_root | quote }}
-exec docker compose --env-file .env -f compose.yaml -f compose.cloud.yaml restart nginx
+source_dir={{ (letsencrypt_root ~ '/live/' ~ platform_domain) | quote }}
+target_dir={{ (project_root ~ '/tls/live/' ~ platform_domain) | quote }}
+if [[ "${RENEWED_LINEAGE:-}" != "$source_dir" ]]; then
+    exit 0
+fi
+install -d -o root -g 101 -m 0750 "$target_dir"
+install -o root -g 101 -m 0644 "$source_dir/fullchain.pem" "$target_dir/fullchain.pem.new"
+install -o root -g 101 -m 0640 "$source_dir/privkey.pem" "$target_dir/privkey.pem.new"
+mv -f -- "$target_dir/fullchain.pem.new" "$target_dir/fullchain.pem"
+mv -f -- "$target_dir/privkey.pem.new" "$target_dir/privkey.pem"
+docker compose --env-file .env -f compose.yaml -f compose.cloud.yaml exec -T nginx nginx -t
+exec docker compose --env-file .env -f compose.yaml -f compose.cloud.yaml exec -T nginx nginx -s reload
