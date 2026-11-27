@@ -41,8 +41,7 @@ server {
 
     location = /healthz {
         access_log off;
-        default_type text/plain;
-        return 200 "ok\n";
+        proxy_pass http://api:8000/health;
     }
 
     location = /metrics {

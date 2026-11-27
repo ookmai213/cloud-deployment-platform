@@ -74,7 +74,18 @@ jobs:
           export APP_VERSION="${GITHUB_SHA}"
           docker compose -f compose.yaml -f compose.override.yaml up -d --no-build --wait --wait-timeout 120
           curl --fail --silent --show-error http://127.0.0.1:8080/api/health | python -c 'import json, sys; assert json.load(sys.stdin)["status"] == "ok"'
+          curl --fail --silent --show-error http://127.0.0.1:8080/ >/dev/null
+          curl --fail --silent --show-error http://127.0.0.1:8080/api/info | python -c 'import json, os, sys; assert json.load(sys.stdin)["version"] == os.environ["GITHUB_SHA"]'
           test "$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:8080/api/metrics)" = 404
+
+      - name: Capture Compose diagnostics on failure
+        if: failure()
+        run: |
+          docker compose -f compose.yaml -f compose.override.yaml ps -a
+          docker compose -f compose.yaml -f compose.override.yaml logs --no-color --tail=100
+          for id in $(docker compose -f compose.yaml -f compose.override.yaml ps -aq); do
+            docker inspect --format '{{json .State}}' "$id"
+          done
 
       - name: Stop the local Compose stack
         if: always()
