@@ -15,6 +15,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     APP_ENV=production \
     ENABLE_API_DOCS=false
 
+# Apply Debian security fixes to PAM packages inherited from the base image.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends --only-upgrade \
+        libpam-modules libpam-modules-bin libpam-runtime libpam0g \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN groupadd --system --gid 10001 app \
     && useradd --system --uid 10001 --gid app --home-dir /nonexistent \
         --no-create-home --shell /usr/sbin/nologin app
